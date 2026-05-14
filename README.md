@@ -132,3 +132,4 @@ Au voisinage de la paroi, la théorie de lubrification prédit une divergence al
 
 - Sugihara-Seki, M. — *The motion of an elliptical cylinder in channel flow at low Reynolds numbers* (référencé dans `affichage_plan_phase.ipynb`)
 Codes éléments finis méthode numérique pour analyse et compréhension d'un plan de phase d'une particule elliptique dans un liquide de Poiseuille
+- Bonheure, D., Hillairet, M., Patriarca, C., Sperone, G. — Long-time behavior of an anisotropic rigid body interacting with a Poiseuille flow in an unbounded 2D channel, arXiv:2406.01092 [math.AP], 2024. https://arxiv.org/abs/2406.01092

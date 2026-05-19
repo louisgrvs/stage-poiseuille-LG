@@ -1,0 +1,240 @@
+//////////////////////////////////////////////////////
+// Lubrification en theta : Yc fixe, theta -> pi/2
+// La particule tourne et s'approche du bord superieur
+// On raffine le maillage dans le gap effectif gapTop(theta)
+//////////////////////////////////////////////////////
+
+real mu   = 1.0;
+real d    = 6.0;
+real ell  = 12.0;
+real Xc   = 2.0;
+real b    = 0.5;
+real a    = 2.0 * b;   // alpha = a/b = 2
+real Umax = 1.0;
+
+// Yc fixe : centre pres du bord superieur
+// On choisit Yc tel qu'a theta=0 le gap est raisonnable
+// yext(theta=0) = b = 0.5, donc gap(theta=0) = d - Yc - b
+real gap0 = 0.3;           // gap initial a theta=0
+real Yc   = d - b - gap0;  // => Yc = 5.2 pour d=6, b=0.5, gap0=0.3
+
+// theta varie de 0 a pi/2
+// A theta=pi/2 : yext = a = 1.0, gap = d - Yc - a
+// Avec nos valeurs : gap(pi/2) = 6 - 5.2 - 1.0 = -0.2 => CONTACT avant pi/2
+// Le code skippe automatiquement les configurations invalides
+
+real marge = 0.015;   // marge minimale pour le maillage
+
+cout << "Yc/d = " << Yc/d << endl;
+cout << "gap(theta=0)    = " << d - Yc - b     << endl;
+cout << "gap(theta=pi/2) = " << d - Yc - a     << " (negatif => contact)" << endl;
+
+ofstream fileLub("lubrification_theta_rotation_Ycfixed.dat");
+fileLub << "# theta  gapTop  A11 A12 A13 A22 A23 A33  b1 b2 b3  Omega' V' U'" << endl;
+
+macro Dij(u1, u2, v1, v2)
+    ( dx(u1)*dx(v1)
+    + dy(u2)*dy(v2)
+    + 0.5*(dy(u1)+dx(u2))*(dy(v1)+dx(v2)) ) // EOM
+
+real Urig  = 0.0;
+real Vrig  = 0.0;
+real Omega = 0.0;
+real theta = 0.0;
+real Xrot  = Xc;
+real Yrot  = Yc;
+
+// Fonction : nombre de points ellipse adapte au gap
+func int nEllipse(real gap)
+{
+    // Plus le gap est petit, plus on raffine l'ellipse
+    if (gap < 0.03) return 300;
+    if (gap < 0.08) return 200;
+    if (gap < 0.15) return 150;
+    return 100;
+}
+
+// Fonction : nombre de points bord superieur adapte au gap
+func int nTop(real gap)
+{
+    if (gap < 0.03) return 200;
+    if (gap < 0.08) return 150;
+    if (gap < 0.15) return 100;
+    return 60;
+}
+int NTheta = 40;  // plus de points
+
+// Gap min et max atteignables
+real yext0    = b;              // gap max : theta=0, yext=b
+real yextpi2  = a;              // gap min : theta=pi/2, yext=a
+real gapMax    = d - Yc - yext0;
+real gapMin    = marge * 2.0;    // on s'arrete a 2*marge du contact
+
+cout << "gapMax=" << gapMax << "  gapMin=" << gapMin << endl;
+
+for(int ii = 0; ii < NTheta; ii++)
+{
+    // Grille log entre gapMin et gapMax
+    // => concentre les points pres de gapMin (contact)
+    real logGmin = log(gapMin);
+    real logGmax = log(gapMax);
+    real gapTarget = exp(logGmax + (logGmin - logGmax) * ii * 1.0 / (NTheta - 1));
+
+    // Inverser : d - Yc - sqrt((a*sin(t))^2 + (b*cos(t))^2) = gapTarget
+    // => sqrt((a*sin(t))^2 + (b*cos(t))^2) = d - Yc - gapTarget
+    real yextTarget = d - Yc - gapTarget;
+
+    // yext(theta) = sqrt((a*sin)^2 + (b*cos)^2)
+    // yext varie entre b (theta=0) et a (theta=pi/2)
+    // Inversion numerique par dichotomie
+    if(yextTarget < b || yextTarget > a)
+    {
+        cout << "SKIP ii=" << ii << " yextTarget=" << yextTarget
+             << " hors [b,a]=[" << b << "," << a << "]" << endl;
+        continue;
+    }
+
+    // Dichotomie sur theta dans [0, pi/2]
+    real tLow = 0.0;
+    real tHigh = pi/2.0;
+    real theta = pi/4.0;
+    for(int kk = 0; kk < 50; kk++)
+    {
+        theta = 0.5*(tLow + tHigh);
+        real yextMid = sqrt((a*sin(theta))^2 + (b*cos(theta))^2);
+        if(yextMid < yextTarget)
+            tLow = theta;
+        else
+            tHigh = theta;
+    }
+
+    // Gap effectif apres inversion (verification)
+    real yext = sqrt((a*sin(theta))^2 + (b*cos(theta))^2);
+    real xext = sqrt((a*cos(theta))^2 + (b*sin(theta))^2);  // <-- manquait
+    real gapTop = d - Yc - yext;
+    real gapBot = d + Yc - yext;
+
+    cout << "ii=" << ii
+         << "  theta/pi=" << theta/pi
+         << "  yext=" << yext
+         << "  gapTop=" << gapTop << endl;
+
+    // Skip si trop pres du bord ou intersection
+    if( gapTop <= marge )
+    {
+        cout << "  STOP : gapTop=" << gapTop << " <= marge=" << marge
+             << " => contact imminent, arret" << endl;
+        break;   // on sort de la boucle, les angles suivants seront encore pires
+    }
+    if( gapBot <= marge || xext >= ell - marge )
+    {
+        cout << "  SKIP geometrique" << endl;
+        continue;
+    }
+
+    // Nombre de points adapte au gap courant
+    int nE = nEllipse(gapTop);
+    int nT = nTop(gapTop);
+
+    border bottom(t=Xc-ell, Xc+ell){ x=t; y=-d;     label=1; }
+    border right (t=-d, d)          { x=Xc+ell; y=t; label=2; }
+    border top   (t=Xc+ell,Xc-ell) { x=t; y=d;       label=3; }
+    border left  (t=d,-d)           { x=Xc-ell; y=t; label=4; }
+    border ellipse(t=2*pi, 0)
+    {
+        real X = a*cos(t);
+        real Y = b*sin(t);
+        x = Xc + X*cos(theta) - Y*sin(theta);
+        y = Yc + X*sin(theta) + Y*cos(theta);
+        label=5;
+    }
+
+    mesh Th = buildmesh(
+        bottom(40) + right(20) + top(nT) + left(20) + ellipse(nE)
+    );
+
+    plot(Th, wait=1); 
+
+    fespace Vh(Th, P2);
+    fespace Qh(Th, P1);
+    Vh u, v, phi, psi;
+    Qh p, q;
+
+    Xrot = Xc;
+    Yrot = Yc;
+
+    problem Stokes([u,v,p],[phi,psi,q]) =
+        int2d(Th)(
+            2*mu*( dx(u)*dx(phi)
+                 + dy(v)*dy(psi)
+                 + 0.5*(dy(u)+dx(v))*(dy(phi)+dx(psi)) )
+            - p*(dx(phi)+dy(psi))
+            - q*(dx(u)+dy(v))
+            + 1e-12*p*q
+        )
+        + on(1,3, u=0, v=0)
+        + on(2,4, u=Umax*(1.0-(y*y)/(d*d)), v=0)
+        + on(5,
+            u = Urig - Omega*(y - Yrot),
+            v = Vrig  + Omega*(x - Xrot)
+        );
+
+    // Sous-probleme (P) : Poiseuille, corps fixe
+    Urig = 0; Vrig = 0; Omega = 0;
+    Stokes;
+    Vh uP = u, vP = v;
+
+    // Sous-probleme (1) : translation x
+    Urig = 1; Vrig = 0; Omega = 0;
+    Stokes;
+    Vh u1 = u, v1 = v;
+
+    // Sous-probleme (2) : translation y
+    Urig = 0; Vrig = 1; Omega = 0;
+    Stokes;
+    Vh u2 = u, v2 = v;
+
+    // Sous-probleme (3) : rotation autour du centre (Xc, Yc)
+    Urig = 0; Vrig = 0; Omega = 1;
+    Stokes;
+    Vh ut = u, vt = v;
+
+    // Matrice de resistance
+    real A11 = int2d(Th)( 2*mu*Dij(u1, v1, u1, v1) );
+    real A12 = int2d(Th)( 2*mu*Dij(u1, v1, u2, v2) );
+    real A13 = int2d(Th)( 2*mu*Dij(u1, v1, ut, vt) );
+    real A22 = int2d(Th)( 2*mu*Dij(u2, v2, u2, v2) );
+    real A23 = int2d(Th)( 2*mu*Dij(u2, v2, ut, vt) );
+    real A33 = int2d(Th)( 2*mu*Dij(ut, vt, ut, vt) );
+
+    // Second membre
+    real b1 = -int2d(Th)( 2*mu*Dij(uP, vP, u1, v1) );
+    real b2 = -int2d(Th)( 2*mu*Dij(uP, vP, u2, v2) );
+    real b3 = -int2d(Th)( 2*mu*Dij(uP, vP, ut, vt) );
+
+    // Resolution 3x3
+    real[int] rhs(3);
+    rhs[0] = b1; rhs[1] = b2; rhs[2] = b3;
+    matrix Amat = [[A11, A12, A13],
+                   [A12, A22, A23],
+                   [A13, A23, A33]];
+    set(Amat, solver=LU);
+    real[int] sol = Amat^-1 * rhs;
+
+    real Usol     = sol[0];
+    real Vsol     = sol[1];
+    real Omegasol = sol[2];
+
+    fileLub << theta   << " " << gapTop << " "
+            << A11 << " " << A12 << " " << A13 << " "
+            << A22 << " " << A23 << " " << A33 << " "
+            << b1  << " " << b2  << " " << b3  << " "
+            << d*Omegasol/Umax << " " << Vsol/Umax << " " << Usol/Umax << endl;
+
+    cout << "  -> gapTop=" << gapTop
+         << "  Omega'=" << d*Omegasol/Umax
+         << "  V'="     << Vsol/Umax
+         << "  U'="     << Usol/Umax << endl;
+}
+
+cout << "Done -> lubrification_theta_rotation_Ycfixed.dat" << endl;

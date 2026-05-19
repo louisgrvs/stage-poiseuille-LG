@@ -1,0 +1,230 @@
+//////////////////////////////////////////////////////
+// Dynamique d'une ellipse en suspension dans un écoulement de Poiseuille
+// CORRECTION : pas de 'problem' dans une macro — on utilise 'solve' directement
+//////////////////////////////////////////////////////
+
+//////////////////////////////////////////////////////
+// PARAMÈTRES
+//////////////////////////////////////////////////////
+
+real mu    = 1.0;
+real d     = 1.0;
+real ell   = 12.0;
+
+real Xc    = 0.0;
+real Yc    = 0.2;
+real theta = -pi/2;
+
+real a = 0.707*d;
+real b = 0.354*d;
+
+real flow  = 1.0;
+real dt    = 0.2;
+int  Nstep = 100;
+
+string outdir = "poiseuille_plots";
+
+//////////////////////////////////////////////////////
+// MACRO DISSIPATION
+//////////////////////////////////////////////////////
+
+macro Dij(u1, u2, v1, v2)
+    ( dx(u1)*dx(v1)
+    + dy(u2)*dy(v2)
+    + 0.5*(dy(u1)+dx(u2))*(dy(v1)+dx(v2)) ) // EOM
+
+//////////////////////////////////////////////////////
+// TABLEAUX DE TRAJECTOIRE
+//////////////////////////////////////////////////////
+
+real[int] trajT(Nstep+1), trajX(Nstep+1), trajY(Nstep+1), trajTheta(Nstep+1);
+trajT[0] = 0; trajX[0] = Xc; trajY[0] = Yc; trajTheta[0] = theta;
+
+//////////////////////////////////////////////////////
+// BOUCLE TEMPORELLE
+//////////////////////////////////////////////////////
+
+// Définir les niveaux fixes une seule fois (idéalement avant la boucle)
+int niso = 20;
+real[int] viso(niso+1);
+real vmin = 0.0 * flow;  // petite marge négative
+real vmax =  2.0 * flow;
+for(int k = 0; k <= niso; k++)
+    viso[k] = vmin + k*(vmax - vmin)/niso;
+
+for(int step = 0; step < Nstep; step++)
+{
+    real tcur = step*dt;
+    cout << "===== step=" << step << "  t=" << tcur
+         << "  Xc=" << Xc << "  Yc=" << Yc << "  theta=" << theta << endl;
+
+    //--------------------------------------------------
+    // 1. MAILLAGE COURANT
+    // On capture les valeurs dans des variables locales
+    // car 'border' est évaluée au moment du buildmesh
+    //--------------------------------------------------
+    real XcL = Xc, YcL = Yc, thetaL = theta;
+
+    border bottom(t = 0, 1) { x = (XcL-ell) + t*2*ell; y = -d;             label=1; }
+    border right (t = 0, 1) { x =  XcL+ell;             y = -d + t*2*d;    label=2; }
+    border top   (t = 0, 1) { x = (XcL+ell) - t*2*ell; y =  d;             label=3; }
+    border left  (t = 0, 1) { x =  XcL-ell;             y =  d - t*2*d;    label=4; }
+    border ellipse(t = 0, 2*pi)
+    {
+        real X = a*cos(t);
+        real Y = b*sin(t);
+        x = XcL + X*cos(thetaL) - Y*sin(thetaL);
+        y = YcL + X*sin(thetaL) + Y*cos(thetaL);
+        label = 5;
+    }
+
+    mesh Th = buildmesh(
+          bottom(40) + right(20) + top(40) + left(20) + ellipse(60)
+    );
+
+    //--------------------------------------------------
+    // 2. ESPACES EF
+    //--------------------------------------------------
+    fespace Vh(Th, P2);
+    fespace Qh(Th, P1);
+
+    Vh uS, vS, phi, psi;
+    Qh pS, q;
+
+    //--------------------------------------------------
+    // 3. SOUS-PROBLÈME (P) : Poiseuille, particule fixe
+    //--------------------------------------------------
+    solve StokesP([uS,vS,pS],[phi,psi,q]) =
+        int2d(Th)(
+            mu*( dx(uS)*dx(phi) + dy(vS)*dy(psi)
+               + 0.5*(dy(uS)+dx(vS))*(dy(phi)+dx(psi)) )
+          - pS*(dx(phi)+dy(psi))
+          - q*(dx(uS)+dy(vS))
+        )
+      + on(1, uS=0,          vS=0)
+      + on(3, uS=0,          vS=0)
+      + on(2, uS=flow*(1-y*y/(d*d)), vS=0)
+      + on(4, uS=flow*(1-y*y/(d*d)), vS=0)
+      + on(5, uS=0,          vS=0);
+
+    Vh uP = uS, vP = vS;
+
+    //--------------------------------------------------
+    // 4. SOUS-PROBLÈME (1) : translation x
+    //--------------------------------------------------
+    solve Stokes1([uS,vS,pS],[phi,psi,q]) =
+        int2d(Th)(
+            mu*( dx(uS)*dx(phi) + dy(vS)*dy(psi)
+               + 0.5*(dy(uS)+dx(vS))*(dy(phi)+dx(psi)) )
+          - pS*(dx(phi)+dy(psi))
+          - q*(dx(uS)+dy(vS))
+        )
+      + on(1, uS=0, vS=0) + on(3, uS=0, vS=0)
+      + on(2, uS=0, vS=0) + on(4, uS=0, vS=0)
+      + on(5, uS=1, vS=0);
+
+    Vh u1 = uS, v1 = vS;
+
+    //--------------------------------------------------
+    // 5. SOUS-PROBLÈME (2) : translation y
+    //--------------------------------------------------
+    solve Stokes2([uS,vS,pS],[phi,psi,q]) =
+        int2d(Th)(
+            mu*( dx(uS)*dx(phi) + dy(vS)*dy(psi)
+               + 0.5*(dy(uS)+dx(vS))*(dy(phi)+dx(psi)) )
+          - pS*(dx(phi)+dy(psi))
+          - q*(dx(uS)+dy(vS))
+        )
+      + on(1, uS=0, vS=0) + on(3, uS=0, vS=0)
+      + on(2, uS=0, vS=0) + on(4, uS=0, vS=0)
+      + on(5, uS=0, vS=1);
+
+    Vh u2 = uS, v2 = vS;
+
+    //--------------------------------------------------
+    // 6. SOUS-PROBLÈME (t) : rotation autour de (XcL, YcL)
+    //--------------------------------------------------
+    solve StokesT([uS,vS,pS],[phi,psi,q]) =
+        int2d(Th)(
+            mu*( dx(uS)*dx(phi) + dy(vS)*dy(psi)
+               + 0.5*(dy(uS)+dx(vS))*(dy(phi)+dx(psi)) )
+          - pS*(dx(phi)+dy(psi))
+          - q*(dx(uS)+dy(vS))
+        )
+      + on(1, uS=0,          vS=0)
+      + on(3, uS=0,          vS=0)
+      + on(2, uS=0,          vS=0)
+      + on(4, uS=0,          vS=0)
+      + on(5, uS=-(y-YcL),   vS=(x-XcL));
+
+    Vh ut = uS, vt = vS;
+
+    //--------------------------------------------------
+    // 7. MATRICE DE RÉSISTANCE + SECOND MEMBRE
+    //--------------------------------------------------
+    real A11 = int2d(Th)( 2*mu*Dij(u1, v1, u1, v1) );
+    real A12 = int2d(Th)( 2*mu*Dij(u1, v1, u2, v2) );
+    real A13 = int2d(Th)( 2*mu*Dij(u1, v1, ut, vt) );
+    real A22 = int2d(Th)( 2*mu*Dij(u2, v2, u2, v2) );
+    real A23 = int2d(Th)( 2*mu*Dij(u2, v2, ut, vt) );
+    real A33 = int2d(Th)( 2*mu*Dij(ut, vt, ut, vt) );
+
+    real b1 = -int2d(Th)( 2*mu*Dij(uP, vP, u1, v1) );
+    real b2 = -int2d(Th)( 2*mu*Dij(uP, vP, u2, v2) );
+    real b3 = -int2d(Th)( 2*mu*Dij(uP, vP, ut, vt) );
+
+    real[int] rhs(3);
+    rhs[0] = b1; rhs[1] = b2; rhs[2] = b3;
+
+    matrix Amat = [[A11, A12, A13],
+                   [A12, A22, A23],
+                   [A13, A23, A33]];
+    set(Amat, solver=LU);
+    real[int] sol = Amat^-1 * rhs;
+
+    real Usol     = sol[0];
+    real Vsol     = sol[1];
+    real Omegasol = sol[2];
+
+    cout << "  U=" << Usol << "  V=" << Vsol << "  Omega=" << Omegasol << endl;
+
+    //--------------------------------------------------
+    // 8. VISUALISATION (avec clamp)
+    //--------------------------------------------------
+    Vh mag;
+    {
+        Vh tmp = sqrt(uP^2 + vP^2);
+        mag[] = tmp[];
+        // Clamp : valeurs > vmax ramenées à vmax pour rester dans la palette
+        for(int i = 0; i < mag[].n; i++)
+            if(mag[][i] > vmax) mag[][i] = vmax;
+    }
+    plot(mag, viso=viso, ps=outdir+"/"+step+".eps",
+        cmm="t="+tcur+"  Yc="+YcL+"  theta="+thetaL+"  Xc="+XcL,
+        fill=1, value=1, wait=0);
+
+    //--------------------------------------------------
+    // 9. INTÉGRATION TEMPORELLE (Euler explicite)
+    //--------------------------------------------------
+    Xc    = Xc    + dt*Usol;
+    Yc    = Yc    + dt*Vsol;
+    theta = theta + dt*Omegasol;
+
+    trajT[step+1]     = tcur + dt;
+    trajX[step+1]     = Xc;
+    trajY[step+1]     = Yc;
+    trajTheta[step+1] = theta;
+}
+
+//////////////////////////////////////////////////////
+// SAUVEGARDE TRAJECTOIRE
+//////////////////////////////////////////////////////
+
+{
+    ofstream fout("trajectory.dat");
+    fout << "# t   Xc   Yc   theta" << endl;
+    for(int i = 0; i <= Nstep; i++)
+        fout << trajT[i] << " " << trajX[i] << " " << trajY[i] << " " << trajTheta[i] << endl;
+}
+
+cout << "===== Simulation terminee. Trajectoire dans trajectory.dat" << endl;

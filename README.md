@@ -9,7 +9,10 @@ Simulation et post-traitement du mouvement d'une particule elliptique dans un é
 ```
 .
 ├── phase_plane_quarter_alpha2_betagoal.edp     # FreeFem++ — calcul du plan de phase
-├── lubrification_thetafix_alpha2_betagoal.edp  # FreeFem++ — analyse de lubrification
+├── ellipse_poiseuille.edp                      # FreeFem++ — simulation temporelle de la trajectoire
+├── lubrification_thetavar_alpha2_betagoal.edp  # FreeFem++ — analyse de lubrification en faisant varier l'angle
+├── lubrification_thetafix_alpha2_betagoal.edp  # FreeFem++ — analyse de lubrification en faisant varier le centre
+├── stokes_with_particle_torc.edp               # FreeFem++ — calcul du torque et des forces pour une particule à position fixée
 ├── affichage_plan_phase.ipynb                  # Python — visualisation du plan de phase
 └── exposant_lubrification.ipynb                # Python — régression des exposants de lubrification
 ```
@@ -24,11 +27,11 @@ Script FreeFem++ qui calcule le plan de phase `(Yc/d, θ/π)` pour une particule
 
 Le script exploite les symétries du problème : seul le quart de domaine `Yc ∈ [0, d]`, `θ ∈ [0, π]` est calculé. Les trois autres quarts sont reconstruits analytiquement :
 
-| Quadrant         | Transformation                        |
-|------------------|---------------------------------------|
-| (Y, −θ)          | (U, −V, +Ω)                           |
-| (−Y, θ)          | (U, +V, −Ω)                           |
-| (−Y, −θ)         | (U, −V, −Ω)                           |
+| Quadrant   | Transformation   |
+|------------|------------------|
+| (Y, −θ)    | (U, −V, +Ω)      |
+| (−Y, θ)    | (U, +V, −Ω)      |
+| (−Y, −θ)   | (U, −V, −Ω)      |
 
 Pour chaque point de grille `(Yc, θ)`, trois problèmes de Stokes sont résolus (translation en X, translation en Y, rotation) afin de construire la matrice de résistance et d'extraire la vitesse de la particule `(V', Ω')`. Les résultats sont écrits dans `phase_plane_quarter_alpha2_beta<XX>.dat`.
 
@@ -42,6 +45,50 @@ Pour chaque point de grille `(Yc, θ)`, trois problèmes de Stokes sont résolus
 | `NYc`     | Nombre de points en Yc/d dans [0, 1] (défaut : 21) |
 
 **Colonnes de sortie :** `θ/π   Yc/d   V/Umax   d·Ω/Umax   U/Umax`
+
+---
+
+### `ellipse_poiseuille.edp`
+
+Script FreeFem++ qui simule la dynamique temporelle d'une particule elliptique dans un écoulement de Poiseuille par intégration explicite d'Euler. À chaque pas de temps, le maillage est reconstruit autour de la position courante de la particule, puis quatre sous-problèmes de Stokes sont résolus (Poiseuille à corps fixe, translation x, translation y, rotation) pour construire la matrice de résistance et le second membre. La vitesse `(U, V, Ω)` est déduite par inversion du système 3×3, puis la position est mise à jour.
+
+Les champs de vitesse sont visualisés à chaque pas avec une palette fixe et sauvegardés sous `poiseuille_plots/<step>.eps`. La trajectoire complète est écrite dans `trajectory.dat`.
+
+**Paramètres clés :**
+
+| Paramètre | Description |
+|-----------|-------------|
+| `Yc`      | Position verticale initiale (défaut : 0.2) |
+| `theta`   | Angle d'orientation initial en radians (défaut : −π/2) |
+| `a`, `b`  | Demi-axes de l'ellipse (défaut : 0.707·d et 0.354·d, soit α = 2) |
+| `dt`      | Pas de temps (défaut : 0.2) |
+| `Nstep`   | Nombre de pas de temps (défaut : 100) |
+| `flow`    | Vitesse maximale du profil de Poiseuille (défaut : 1.0) |
+| `ell`     | Demi-longueur du domaine de calcul (défaut : 12.0) |
+
+**Fichiers de sortie :** `poiseuille_plots/<step>.eps`, `trajectory.dat`  
+**Colonnes de `trajectory.dat` :** `t   Xc   Yc   theta`
+
+---
+
+### `lubrification_thetavar_alpha2_betagoal.edp`
+
+Script FreeFem++ pour l'analyse de lubrification au voisinage de la paroi supérieure lorsque la particule tourne à centre `Yc` fixé. L'angle θ varie de 0 à π/2 selon une grille logarithmique sur le jeu `gapTop = d − Yc − yext(θ)`, concentrant les points près du contact. L'inversion de la relation `yext(θ)` se fait par dichotomie. Le maillage est raffiné automatiquement (ellipse et paroi supérieure) en fonction du gap courant.
+
+Pour chaque configuration valide, les quatre sous-problèmes de Stokes sont résolus pour extraire la matrice de résistance complète et les vitesses libres `(U', V', Ω')`.
+
+**Paramètres clés :**
+
+| Paramètre | Description |
+|-----------|-------------|
+| `gap0`    | Jeu initial à θ = 0 (défaut : 0.3) |
+| `Yc`      | Centre vertical, déduit de gap0 (= d − b − gap0) |
+| `a`, `b`  | Demi-axes (défaut : a = 2b = 1.0, soit α = 2) |
+| `marge`   | Jeu géométrique minimal (défaut : 0.015) |
+| `NTheta`  | Nombre de points en θ dans la grille log (défaut : 40) |
+
+**Fichier de sortie :** `lubrification_theta_rotation_Ycfixed.dat`  
+**Colonnes de sortie :** `theta   gapTop   A11   A12   A13   A22   A23   A33   b1   b2   b3   d·Ω'/Umax   V'/Umax   U'/Umax`
 
 ---
 
@@ -64,6 +111,26 @@ Deux variantes de conditions aux bords sont implémentées pour le sous-problèm
 
 **Fichiers de sortie :** `lubrification_alpha2_theta0pi.dat`, `lubrification_alpha2_theta0pi_Yrot0.dat`  
 **Colonnes de sortie :** `1 − Yc/d   ...   A11   ...   A13   ...   A22   A33   ...`
+
+---
+
+### `stokes_with_particle_torc.edp`
+
+Script FreeFem++ qui calcule le champ de vitesse et de pression autour d'une particule elliptique à position et orientation fixées, et en déduit la matrice de résistance complète ainsi que les vitesses libres `(U, V, Ω)`. Contrairement à `ellipse_poiseuille.edp`, ce script n'intègre pas en temps : il résout une seule configuration et produit des visualisations.
+
+Les quatre sous-problèmes de Stokes sont résolus sur un domaine rectangulaire avec conditions de Poiseuille sur les bords latéraux et non-glissement sur les parois et l'ellipse. La matrice de résistance est assemblée par la formule de dissipation `Aij = ∫ 2μ D(uⁱ):D(uʲ) dx`.
+
+**Paramètres clés :**
+
+| Paramètre     | Description |
+|---------------|-------------|
+| `Yc`, `theta` | Position verticale et orientation de la particule (défaut : 0.0, π/2) |
+| `a`, `b`      | Demi-axes de l'ellipse (défaut : 0.707 et 0.354, soit α ≈ 2) |
+| `flow`        | Vitesse maximale du profil de Poiseuille (défaut : 1.0) |
+| `d`           | Demi-largeur du canal (défaut : 1.0) |
+| `ell`         | Demi-longueur du domaine de calcul (défaut : 4.0) |
+
+**Fichiers de sortie :** `velocity_vectors.eps`, `velocity_magnitude.eps`, `velocity_field.eps`, `pressure.eps`
 
 ---
 
@@ -97,7 +164,7 @@ Effectue une régression linéaire log-log de `|Aij|` en fonction de `𝔡` (jeu
 | A22         | −3/2              |
 | A33         | −1/2              |
 
-Les deux jeux de données (correspondant aux deux variantes de conditions aux bords du fichier `.edp`) sont traités, chacun produisant une figure à 4 panneaux log-log avec les droites de régression superposées aux données brutes.
+Les deux jeux de données (correspondant aux deux variantes de conditions aux bords) sont traités, chacun produisant une figure à 4 panneaux log-log avec les droites de régression superposées aux données brutes.
 
 **Dépendances :** `numpy`, `matplotlib`, `scipy`
 
@@ -106,6 +173,13 @@ Les deux jeux de données (correspondant aux deux variantes de conditions aux bo
 ## Chaîne de traitement
 
 ```
+FreeFem++ ellipse_poiseuille.edp
+    └─► poiseuille_plots/<step>.eps   (visualisation de la dynamique)
+    └─► trajectory.dat                (trajectoire t, Xc, Yc, θ)
+
+FreeFem++ stokes_with_particle_torc.edp
+    └─► velocity_vectors.eps / velocity_magnitude.eps / pressure.eps
+
 FreeFem++ phase_plane_quarter_alpha2_betagoal.edp
     └─► phase_plane_quarter_alpha2_beta<XX>.dat
             └─► affichage_plan_phase.ipynb  (visualisation & détection des équilibres)
@@ -113,7 +187,11 @@ FreeFem++ phase_plane_quarter_alpha2_betagoal.edp
 FreeFem++ lubrification_thetafix_alpha2_betagoal.edp
     └─► lubrification_alpha2_theta0pi.dat
     └─► lubrification_alpha2_theta0pi_Yrot0.dat
-            └─► exposant_lubrification.ipynb  (régression log-log & comparaison des exposants)
+            └─► exposant_lubrification.ipynb
+
+FreeFem++ lubrification_thetavar_alpha2_betagoal.edp
+    └─► lubrification_theta_rotation_Ycfixed.dat
+            └─► exposant_lubrification.ipynb
 ```
 
 ---
@@ -128,8 +206,7 @@ Au voisinage de la paroi, la théorie de lubrification prédit une divergence al
 
 ---
 
-## Référence
+## Références
 
-- Sugihara-Seki, M. — *The motion of an elliptical cylinder in channel flow at low Reynolds numbers* (référencé dans `affichage_plan_phase.ipynb`)
-Codes éléments finis méthode numérique pour analyse et compréhension d'un plan de phase d'une particule elliptique dans un liquide de Poiseuille
-- Bonheure, D., Hillairet, M., Patriarca, C., Sperone, G. — Long-time behavior of an anisotropic rigid body interacting with a Poiseuille flow in an unbounded 2D channel, arXiv:2406.01092 [math.AP], 2024. https://arxiv.org/abs/2406.01092
+- Sugihara-Seki, M. — *The motion of an elliptical cylinder in channel flow at low Reynolds numbers*
+- Bonheure, D., Hillairet, M., Patriarca, C., Sperone, G. — *Long-time behavior of an anisotropic rigid body interacting with a Poiseuille flow in an unbounded 2D channel*, arXiv:2406.01092 [math.AP], 2024. https://arxiv.org/abs/2406.01092

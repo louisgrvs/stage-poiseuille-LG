@@ -3,14 +3,17 @@
 // On fixe Yc independamment du point d'equilibre
 //////////////////////////////////////////////////////
 
-real goal = 0.15;
+real goal = 0.0035;
+
 real mu   = 1.0;
 real d    = 6.0;
 real ell  = 12.0;
-real Xc   = 2.0;
-real b = 0.5 ;
-real a    = 2 * b;
-real theta = 0.0;
+real Xc   = 0.0;
+real b    = d * sqrt(goal / 2);   // b = d*sqrt(beta/alpha)
+real a    = 2 * b;                // a = alpha * b
+//real b = sqrt(0.25*d*d);  // <-pour si on veut faire un disque
+//real a = b;
+real theta = 0.25*pi;
 real Yc    = 0.0;
 real flow  = 1.0;
 func Up    = flow*(1.0 - (y*y)/(d*d));
@@ -54,32 +57,30 @@ macro Dij(u1, u2, v1, v2)
     + 0.5*(dy(u1)+dx(u2))*(dy(v1)+dx(v2)) ) // EOM
 
 // Marge tres petite pour pouvoir s'approcher du bord
-real marge = 0.02;
+real marge = 1e-5;
 
 // Grille concentree pres du bord
 // On va de dist=0.02 a dist=0.5 en echelle log
-int NYclub = 20;   // plus de points
+int NYclub = 40;   // plus de points
 
 // Distance minimale geometrique possible
 theta = 0.0*pi;   // on fixe theta AVANT de calculer yext
 
-real yext    = sqrt( (a*sin(theta))^2 + (b*cos(theta))^2 );
-real distmin = (yext + marge) / d;
+real distmin = 5e-4;   // IMPORTANT
 real distmax = 0.3;
 
-ofstream fileLub("lubrification_alpha2_theta0pi_Yrot0.dat");
+ofstream fileLub("lubrification_alpha2_theta025pi_beta0035.dat");
 
 for(int jj = 0; jj < NYclub; jj++)
 {
-    // Grille log entre dist_min et dist_max
-    // log(dist) varie lineairement
-    real logdmin = log(distmin);
-    real logdmax = log(distmax);
-    real logd    = logdmin + (logdmax - logdmin) * jj * 1.0 / (NYclub - 1);
-    real distval = exp(logd);
+    // concentration vers petits gaps
+    real t = jj*1.0/(NYclub-1);
+    real dist = distmin*pow(distmax/distmin, pow(t, 3.0));
 
-    // Yc correspondant (on est pres du bord superieur)
-    Yc = (1.0 - distval) * d;
+    // GAP physique cohérent
+    Yc = d - b - dist;
+
+    real distval = dist;
 
     // Verification geometrique GENERALE (valable pour tout theta)
     real yMaxE = Yc + sqrt( (a*sin(theta))^2 + (b*cos(theta))^2 );
@@ -87,12 +88,9 @@ for(int jj = 0; jj < NYclub; jj++)
     real xMaxE = Xc + sqrt( (a*cos(theta))^2 + (b*sin(theta))^2 );
 
 
-    if( yMaxE >= d - marge || yMinE <= -d + marge
-    || xMaxE >= ell - marge )
+     if( yMaxE >= d - marge || yMinE <= -d + marge || xMaxE >= ell - marge )
     {
-        cout << "SKIP jj=" << jj
-            << " dist=" << distval
-            << " Yc/d=" << Yc/d << endl;
+        cout << "SKIP jj=" << jj << " dist=" << dist << endl;
         continue;
     }
 
@@ -100,9 +98,8 @@ for(int jj = 0; jj < NYclub; jj++)
          << "  dist=" << distval
          << "  Yc/d=" << Yc/d << endl;
 
-    // Maillage beaucoup plus raffine pres du bord
     mesh Th = buildmesh(
-        bottom(40) + right(20) + top(120) + left(20) + ellipse(150)
+        bottom(40) + right(20) + top(500) + left(20) + ellipse(600)
     );
 
     fespace Vh(Th, P2);
@@ -120,7 +117,7 @@ for(int jj = 0; jj < NYclub; jj++)
         + 1e-12*p*q   // regularisation plus petite
         )
         + on(1,3, u=0, v=0)
-        + on(2,4, u=Up, v=0)
+        + on(2,4, u=flow*(1.0 - (y*y)/(d*d)), v=0)
         + on(5,
             u = Urig - Omega*(y - Yrot),
             v= Vrig  + Omega*(x-Xrot)
@@ -149,7 +146,7 @@ for(int jj = 0; jj < NYclub; jj++)
 
     // Point de contact autour du quel on tourne.
     Xrot = Xc;
-    Yrot = 0;
+    Yrot = Yc;
     solveStokes(0, 0, 1);  // donne u=-(y-(Yc)), v=x-XC
 
     Vh ut = u, vt = v;

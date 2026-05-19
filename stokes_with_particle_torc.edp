@@ -1,0 +1,220 @@
+//////////////////////////////////////////////////////
+// Visualisation du champs de vélocité / ligne de pression pour une particule à temps fixé.
+//////////////////////////////////////////////////////
+
+//////////////////////////////////////////////////////
+// PARAMETERS
+//////////////////////////////////////////////////////
+
+real mu    = 1.0;     // viscosity
+real d     = 1.0;     // half channel height
+real ell   = 4.0;     // half-length of computational window
+
+real Xc    = 0.0;     // particle center
+real Yc    = 0.0;
+real theta = pi/2;    // orientation (radians)
+
+real a = 0.707;         // ellipse semi-major axis
+real b = 0.354;         // ellipse semi-minor axis
+
+// rigid body velocity (prescribed here)
+real U = 0.0;
+real V = 0.0;
+real omega = 0.0;
+real flow  = 1.0;
+
+//////////////////////////////////////////////////////
+// POISEUILLE PROFILE
+//////////////////////////////////////////////////////
+
+func real Up(real y) {
+    return flow*(1.0 - (y*y)/(d*d));
+}
+
+//////////////////////////////////////////////////////
+// BOUNDARIES
+//////////////////////////////////////////////////////
+
+// bottom wall
+border bottom(t = Xc-ell, Xc+ell) { x = t; y = -d; label=1; }
+
+// right artificial boundary
+border right(t = -d, d) { x = Xc+ell; y = t; label=2; }
+
+// top wall
+border top(t = Xc+ell, Xc-ell) { x = t; y = d; label=3; }
+
+// left artificial boundary
+border left(t = d, -d) { x = Xc-ell; y = t; label=4; }
+
+// ellipse boundary (rotated)
+border ellipse(t = 0, 2*pi)
+{
+    real X = a*cos(t);
+    real Y = b*sin(t);
+    x = Xc + X*cos(theta) - Y*sin(theta);
+    y = Yc + X*sin(theta) + Y*cos(theta);
+    label = 5;
+}
+
+//////////////////////////////////////////////////////
+// MESH
+//////////////////////////////////////////////////////
+
+mesh Th = buildmesh(
+      bottom(40)
+    + right(20)
+    + top(40)
+    + left(20)
+    + ellipse(60)
+);
+//plot(Th, wait=1);
+
+//////////////////////////////////////////////////////
+// FINITE ELEMENT SPACES
+//////////////////////////////////////////////////////
+
+fespace Vh(Th, P2);
+fespace Qh(Th, P1);
+
+Vh u, v, phi, psi;
+Qh p, q;
+
+//////////////////////////////////////////////////////
+// STOKES PROBLEM (VARIATIONAL FORM)
+//////////////////////////////////////////////////////
+
+problem Stokes([u,v,p],[phi,psi,q]) =
+    int2d(Th)(
+        mu * (
+            dx(u)*dx(phi)
+          + dy(v)*dy(psi)
+          + 0.5*(dy(u)+dx(v))*(dy(phi)+dx(psi))
+        )
+      - p*(dx(phi)+dy(psi))
+      - q*(dx(u)+dy(v))
+    )
+
+  // no-slip on channel walls
+  + on(1, u=0, v=0)
+  + on(3, u=0, v=0)
+
+  // Poiseuille on artificial boundaries
+  + on(2, u=Up(y), v=0)
+  + on(4, u=Up(y), v=0)
+
+  // rigid body velocity on ellipse
+  + on(5,
+       u = U - omega*(y - Yc),
+       v = V + omega*(x - Xc)
+    );
+
+//////////////////////////////////////////////////////
+// SOLVE
+//////////////////////////////////////////////////////
+macro solveStokes(Uval, Vval, Wval)
+{
+    U = Uval;
+    V = Vval;
+    omega = Wval;
+    Stokes;
+} // EOM
+
+// Macro pour D(u):D(v) = dx(u1)*dx(v1) + dy(u2)*dy(v2)
+//                       + 0.5*(dy(u1)+dx(u2))*(dy(v1)+dx(v2))
+macro Dij(u1, u2, v1, v2)
+    ( dx(u1)*dx(v1)
+    + dy(u2)*dy(v2)
+    + 0.5*(dy(u1)+dx(u2))*(dy(v1)+dx(v2)) ) // EOM
+// ==============================================
+        // SOUS-PROBLEME (P) : Poiseuille, particule fixe
+        // ==============================================
+flow = 1;
+solveStokes(0, 0, 0);
+Vh uP = u, vP = v;
+
+        // Second membre : b_i = -int 2 D(u^P):D(u^i) dx
+        // (calculé après chaque sous-problème ci-dessous)
+
+        // ==============================================
+        // SOUS-PROBLEME (1) : translation x
+        // bord canal = 0, ellipse = (1, 0)
+        // ==============================================
+flow = 0;
+solveStokes(1, 0, 0);
+Vh u1 = u, v1 = v;
+
+        // ==============================================
+        // SOUS-PROBLEME (2) : translation y
+        // bord canal = 0, ellipse = (0, 1)
+        // ==============================================
+solveStokes(0, 1, 0);
+Vh u2 = u, v2 = v;
+
+        // ==============================================
+        // SOUS-PROBLEME (theta) : rotation
+        // bord canal = 0, ellipse = (-(y-Yc), x-Xc)
+        // ==============================================
+solveStokes(0, 0, 1);
+Vh ut = u, vt = v;
+
+        // ==============================================
+        // MATRICE A  (formulation dissipation)
+        // A_ij = int_Omega 2 mu D(u^i):D(u^j) dx
+        //
+        // Symétrique par construction — on calcule les 6 termes
+        // ==============================================
+real A11 = int2d(Th)( 2*mu*Dij(u1, v1, u1, v1) );
+real A12 = int2d(Th)( 2*mu*Dij(u1, v1, u2, v2) );
+real A13 = int2d(Th)( 2*mu*Dij(u1, v1, ut, vt) );
+real A22 = int2d(Th)( 2*mu*Dij(u2, v2, u2, v2) );
+real A23 = int2d(Th)( 2*mu*Dij(u2, v2, ut, vt) );
+real A33 = int2d(Th)( 2*mu*Dij(ut, vt, ut, vt) );
+
+        // ==============================================
+        // SECOND MEMBRE
+        // b_i = - int_Omega 2 mu D(u^P):D(u^i) dx
+        //
+        // Par réciprocité de Lorentz :
+        // int 2mu D(u^P):D(u^i) = int_{bord ellipse} sigma(u^P).n . u^i ds
+        // = forces de Poiseuille projetées sur u^i
+        // => cohérent avec l'ancien rhs = -FxP, -FyP, -TP
+        // ==============================================
+real b1 = -int2d(Th)( 2*mu*Dij(uP, vP, u1, v1) );
+real b2 = -int2d(Th)( 2*mu*Dij(uP, vP, u2, v2) );
+real b3 = -int2d(Th)( 2*mu*Dij(uP, vP, ut, vt) );
+
+        // ==============================================
+        // RESOLUTION DU SYSTEME 3x3
+        // ==============================================
+real[int] rhs(3);
+rhs[0] = b1;
+rhs[1] = b2;
+rhs[2] = b3;
+
+matrix Amat = [[A11, A12, A13],
+               [A12, A22, A23],
+               [A13, A23, A33]];
+set(Amat, solver=LU);
+real[int] sol = Amat^-1 * rhs;
+
+real Usol     = sol[0];
+real Vsol     = sol[1];
+real Omegasol = sol[2];
+
+cout << "VELOCITY U = " << Usol 
+             << "  VELOCITY V = " << Vsol
+             << "  Omega = " << Omegasol 
+             << " Y = " << Yc
+             << " Theta =  " << theta << endl;
+cout << "alpha=" << a/b << " beta=" << (a*b)/(d*d) << endl;
+//////////////////////////////////////////////////////
+// VISUALIZATION
+//////////////////////////////////////////////////////
+
+Vh mag = sqrt(u^2 + v^2);
+
+plot([u,v], ps="velocity_vectors.eps", cmm="Velocity vectors", wait=1);
+plot(mag, ps="velocity_magnitude.eps", cmm="Magnitude of velocity", wait=1);
+plot(u, v, ps="velocity_field.eps", cmm="Velocity field", wait=1);
+plot(p, ps="pressure.eps", cmm="Pressure", wait=1);
